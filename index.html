@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Docx Corrector (JSON Structured)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js"></script>
+    
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #10b981;
+            --danger: #ef4444;
+            --diff-add: rgba(16, 185, 129, 0.3);
+            --diff-del: rgba(239, 68, 68, 0.3);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg-color);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.15) 0px, transparent 50%);
+            background-attachment: fixed;
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            gap: 20px;
+        }
+
+        .glass {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .header { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; padding: 20px; }
+        .input-group { display: flex; flex-direction: column; gap: 8px; }
+        label { font-size: 0.9rem; color: var(--text-muted); }
+        input[type="text"], input[type="password"], input[type="number"], select {
+            width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--glass-border);
+            background: rgba(0, 0, 0, 0.2); color: var(--text-main); outline: none; transition: border-color 0.3s;
+        }
+        input:focus, select:focus { border-color: var(--accent); }
+
+        select {
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 16px;
+            padding-right: 36px;
+            cursor: pointer;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        select option {
+            background-color: #0f172a;
+            color: #f8fafc;
+            padding: 10px;
+            font-size: 0.95rem;
+        }
+        .checkbox-group {
+            display: flex; align-items: center; gap: 8px; margin-top: 6px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer;
+            background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border);
+        }
+        .checkbox-group label { cursor: pointer; margin: 0; }
+
+        .file-drop-area {
+            grid-column: span 4; border: 2px dashed var(--glass-border); border-radius: 12px;
+            padding: 30px; text-align: center; cursor: pointer; transition: all 0.3s; background: rgba(0, 0, 0, 0.1);
+        }
+        .file-drop-area:hover, .file-drop-area.dragover { border-color: var(--accent); background: rgba(59, 130, 246, 0.1); }
+        #fileInput { display: none; }
+
+        .workspace { display: flex; flex: 1; gap: 20px; min-height: 400px; }
+        .panel { flex: 1; display: flex; flex-direction: column; padding: 20px; overflow: hidden; }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid var(--glass-border); }
+        .content-area { flex: 1; overflow-y: auto; padding-right: 10px; padding-bottom: 150px; font-size: 1rem; line-height: 1.6; white-space: pre-wrap; }
+
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        ins { background-color: var(--diff-add); text-decoration: none; border-radius: 3px; padding: 0 2px; }
+        del { background-color: var(--diff-del); text-decoration: line-through; border-radius: 3px; padding: 0 2px; }
+
+        .controls-footer { padding: 20px; display: flex; flex-direction: column; gap: 15px; position: fixed; bottom: 20px; left: 20px; right: 20px; z-index: 1000; }
+        .progress-container { width: 100%; height: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; overflow: hidden; }
+        .progress-bar { height: 100%; width: 0%; background: var(--accent); transition: width 0.3s ease; }
+        .stats { display: flex; justify-content: space-between; font-size: 0.9rem; color: var(--text-muted); }
+        .buttons { display: flex; gap: 15px; justify-content: center; }
+
+        button { padding: 10px 24px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; color: white; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: var(--accent); }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+        .btn-success { background: var(--success); }
+        .btn-success:hover:not(:disabled) { background: #059669; }
+        .btn-danger { background: var(--danger); }
+        .btn-danger:hover:not(:disabled) { background: #dc2626; }
+
+        .switch-wrapper { display: flex; align-items: center; gap: 10px; }
+        .switch { position: relative; display: inline-block; width: 40px; height: 20px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.3); transition: .4s; border-radius: 20px; border: 1px solid var(--glass-border); }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 2px; bottom: 2px; background-color: var(--text-main); transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--accent); }
+        input:checked + .slider:before { transform: translateX(20px); }
+
+        .page-block { margin-bottom: 20px; padding: 15px; border-radius: 8px; background: rgba(255,255,255,0.02); border: 1px solid transparent; }
+        .page-block.active { border-color: var(--accent); background: rgba(59, 130, 246, 0.05); box-shadow: 0 0 15px rgba(59, 130, 246, 0.1); }
+        .page-title { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+        .paragraph { margin-bottom: 8px; }
+    </style>
+</head>
+<body>
+
+    <div class="header glass">
+        <div class="input-group">
+            <label for="apiKey">OpenRouter API Key</label>
+            <input type="password" id="apiKey" placeholder="sk-or-v1-...">
+        </div>
+        <div class="input-group">
+            <label for="modelSearch">Поиск модели</label>
+            <input type="text" id="modelSearch" placeholder="Название или ID...">
+        </div>
+        <div class="input-group">
+            <label for="modelSelect">Выбор модели <span id="modelLoading" style="color: var(--accent); font-size: 0.8rem;">(Загрузка...)</span></label>
+            <select id="modelSelect"></select>
+            <div class="checkbox-group">
+                <input type="checkbox" id="freeOnly" checked>
+                <label for="freeOnly">Только бесплатные</label>
+            </div>
+        </div>
+
+        <div class="input-group">
+            <label for="batchSize">Размер батча (символов) <span id="pageCountDisplay" style="color: var(--accent);"></span></label>
+            <div style="display: flex; gap: 10px;">
+                <input type="number" id="batchSize" min="1" max="10000" style="flex: 1;">
+                <button id="btnSaveBatch" class="btn-success" style="padding: 0 15px;" title="Сохранить">💾</button>
+                <button id="btnResetBatch" class="btn-danger" style="padding: 0 15px;" title="Сбросить по умолчанию">↺</button>
+            </div>
+        </div>
+
+        <div class="file-drop-area" id="dropArea">
+            <p>Перетащите файл .docx сюда или кликните для выбора</p>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;" id="fileNameDisplay">Файл не выбран</p>
+            <input type="file" id="fileInput" accept=".docx">
+        </div>
+    </div>
+
+    <div class="workspace">
+        <div class="panel glass">
+            <div class="panel-header">
+                <h3>Оригинал</h3>
+            </div>
+            <div class="content-area" id="leftPanel"></div>
+        </div>
+        
+        <div class="panel glass">
+            <div class="panel-header">
+                <h3>Изменённый документ</h3>
+                <div class="switch-wrapper">
+                    <label class="switch">
+                        <input type="checkbox" id="showDiff" checked>
+                        <span class="slider"></span>
+                    </label>
+                    <label for="showDiff">Показать различия</label>
+                </div>
+            </div>
+            <div class="content-area" id="rightPanel"></div>
+        </div>
+    </div>
+
+    <div class="controls-footer glass">
+        <div class="progress-container">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="stats">
+            <span id="progressText">Ожидание файла...</span>
+            <span id="timeStats">Последнее изменение: -, Время батча: -, Общее время: -, Осталось: -</span>
+        </div>
+        <div class="buttons">
+            <button class="btn-danger" id="btnReset" style="display: none;">Сбросить проект</button>
+            <button class="btn-primary" id="btnStart" disabled>Начать работу</button>
+            <button class="btn-success" id="btnDownload" style="display: none;">Скачать результат</button>
+        </div>
+    </div>
+
+    <script>
+        const dmp = new diff_match_patch();
+        let allModels = [];
+        
+        let docxZip = null;
+        let xmlDoc = null;
+        
+        let CHARS_PER_BATCH = parseInt(sessionStorage.getItem('batchSize')) || 500; 
+        let pages = []; 
+        let currentPageIndex = 0;
+        
+        let isProcessing = false;
+        let isPaused = false;
+        let startTime = 0;
+        let processedCountThisSession = 0;
+        let batchStartTime = 0;
+        let lastBatchTimeMs = 0;
+        let totalProcessingTimeMs = 0;
+
+        const els = {
+            apiKey: document.getElementById('apiKey'),
+            modelSearch: document.getElementById('modelSearch'),
+            modelSelect: document.getElementById('modelSelect'),
+            freeOnly: document.getElementById('freeOnly'),
+            modelLoading: document.getElementById('modelLoading'),
+            dropArea: document.getElementById('dropArea'),
+            fileInput: document.getElementById('fileInput'),
+            fileNameDisplay: document.getElementById('fileNameDisplay'),
+            batchSize: document.getElementById('batchSize'),
+            btnSaveBatch: document.getElementById('btnSaveBatch'),
+            btnResetBatch: document.getElementById('btnResetBatch'),
+            pageCountDisplay: document.getElementById('pageCountDisplay'),
+            leftPanel: document.getElementById('leftPanel'),
+            rightPanel: document.getElementById('rightPanel'),
+            showDiff: document.getElementById('showDiff'),
+            progressBar: document.getElementById('progressBar'),
+            progressText: document.getElementById('progressText'),
+            timeStats: document.getElementById('timeStats'),
+            btnStart: document.getElementById('btnStart'),
+            btnDownload: document.getElementById('btnDownload'),
+            btnReset: document.getElementById('btnReset')
+        };
+
+        // --- Загрузка моделей ---
+        async function fetchModels() {
+            try {
+                const response = await fetch('https://openrouter.ai/api/v1/models');
+                const data = await response.json();
+                allModels = data.data;
+                els.modelLoading.style.display = 'none';
+                applyModelFilters();
+                
+                const savedModel = sessionStorage.getItem('selectedModel');
+                if (savedModel && allModels.find(m => m.id === savedModel)) {
+                    els.modelSelect.value = savedModel;
+                } else {
+                    const targetId = "google/gemini-2.5-flash:free";
+                    if (allModels.find(m => m.id === targetId)) els.modelSelect.value = targetId;
+                }
+            } catch (error) {
+                els.modelLoading.textContent = '(Ошибка загрузки)';
+                els.modelLoading.style.color = 'var(--danger)';
+            }
+        }
+
+        function applyModelFilters() {
+            const term = els.modelSearch.value.toLowerCase();
+            const onlyFree = els.freeOnly.checked;
+            const currentSelection = els.modelSelect.value;
+
+            const filtered = allModels.filter(m => {
+                const matchesSearch = m.name.toLowerCase().includes(term) || m.id.toLowerCase().includes(term);
+                const matchesFree = onlyFree ? m.pricing.prompt === "0" : true;
+                return matchesSearch && matchesFree;
+            });
+
+            els.modelSelect.innerHTML = '';
+            filtered.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = `${m.name} (${m.id})`;
+                els.modelSelect.appendChild(opt);
+            });
+
+            if (filtered.find(m => m.id === currentSelection)) els.modelSelect.value = currentSelection;
+        }
+
+        els.modelSearch.addEventListener('input', applyModelFilters);
+        els.freeOnly.addEventListener('change', applyModelFilters);
+        els.modelSelect.addEventListener('change', () => sessionStorage.setItem('selectedModel', els.modelSelect.value));
+
+        // --- Настройки ---
+        function saveSettings() { sessionStorage.setItem('openRouterApiKey', els.apiKey.value); }
+        function loadSettings() { const key = sessionStorage.getItem('openRouterApiKey'); if (key) els.apiKey.value = key; }
+        els.apiKey.addEventListener('input', saveSettings);
+
+        els.batchSize.value = CHARS_PER_BATCH;
+        
+        function updateBatchSettings() {
+            let newSize = parseInt(els.batchSize.value);
+            if (isNaN(newSize) || newSize < 1) newSize = 500;
+            CHARS_PER_BATCH = newSize;
+            sessionStorage.setItem('batchSize', CHARS_PER_BATCH);
+            
+            if (xmlDoc) {
+                currentPageIndex = 0;
+                extractPages();
+                renderPanels();
+                updateUIState();
+            }
+        }
+
+        els.btnSaveBatch.addEventListener('click', updateBatchSettings);
+        els.btnResetBatch.addEventListener('click', () => {
+            els.batchSize.value = 500;
+            updateBatchSettings();
+        });
+
+        // --- Синхронизация скролла ---
+        let isSyncingLeftScroll = false;
+        let isSyncingRightScroll = false;
+        els.leftPanel.addEventListener('scroll', function() {
+            if (!isSyncingLeftScroll) { isSyncingRightScroll = true; els.rightPanel.scrollTop = this.scrollTop; }
+            isSyncingLeftScroll = false;
+        });
+        els.rightPanel.addEventListener('scroll', function() {
+            if (!isSyncingRightScroll) { isSyncingLeftScroll = true; els.leftPanel.scrollTop = this.scrollTop; }
+            isSyncingRightScroll = false;
+        });
+
+        // --- Файлы ---
+        els.dropArea.addEventListener('dragover', (e) => { e.preventDefault(); els.dropArea.classList.add('dragover'); });
+        els.dropArea.addEventListener('dragleave', () => els.dropArea.classList.remove('dragover'));
+        els.dropArea.addEventListener('drop', (e) => {
+            e.preventDefault(); els.dropArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        els.dropArea.addEventListener('click', () => els.fileInput.click());
+        els.fileInput.addEventListener('change', (e) => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+        async function handleFile(file) {
+            if (!file.name.endsWith('.docx')) return alert('Пожалуйста, загрузите файл формата .docx');
+            els.fileNameDisplay.textContent = file.name;
+            
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const base64 = arrayBufferToBase64(arrayBuffer);
+                try {
+                    sessionStorage.setItem('projectDocx', base64);
+                    sessionStorage.setItem('projectName', file.name);
+                    sessionStorage.setItem('projectProgress', '0');
+                    sessionStorage.removeItem('projectModifiedXml');
+                    sessionStorage.setItem('totalProcessingTimeMs', '0');
+                    totalProcessingTimeMs = 0;
+                } catch (e) { console.warn("Файл слишком большой для sessionStorage."); }
+
+                await loadDocxFromArrayBuffer(arrayBuffer);
+            } catch (error) { alert('Ошибка при чтении файла.'); }
+        }
+
+        // --- Парсинг DOCX ---
+        async function loadDocxFromArrayBuffer(arrayBuffer, modifiedXmlString = null) {
+            docxZip = new JSZip();
+            await docxZip.loadAsync(arrayBuffer);
+            
+            let docXmlString = modifiedXmlString || await docxZip.file("word/document.xml").async("string");
+            const parser = new DOMParser();
+            xmlDoc = parser.parseFromString(docXmlString, "application/xml");
+            
+            extractPages();
+            renderPanels();
+            updateUIState();
+        }
+
+        function extractPages() {
+            pages = [];
+            const paragraphs = xmlDoc.getElementsByTagName("w:p");
+            let currentPage = [];
+            let currentBatchChars = 0;
+            
+            for (let i = 0; i < paragraphs.length; i++) {
+                const p = paragraphs[i];
+                const text = getParagraphText(p);
+                
+                if (text.trim().length === 0) continue;
+
+                if (currentBatchChars + text.length > CHARS_PER_BATCH && currentPage.length > 0) {
+                    pages.push(currentPage);
+                    currentPage = [];
+                    currentBatchChars = 0;
+                }
+
+                currentPage.push({
+                    pNode: p,
+                    originalText: text,
+                    modifiedText: text
+                });
+                
+                currentBatchChars += text.length;
+            }
+            if (currentPage.length > 0) pages.push(currentPage);
+            
+            els.pageCountDisplay.textContent = `(Страниц: ${pages.length})`;
+        }
+
+        function getParagraphText(pNode) {
+            let text = "";
+            const elements = pNode.getElementsByTagName("*");
+            for (let i = 0; i < elements.length; i++) {
+                if (elements[i].localName === "t") {
+                    text += elements[i].textContent;
+                } else if (elements[i].localName === "br") {
+                    text += "\n";
+                }
+            }
+            return text;
+        }
+
+        function setParagraphText(pNode, newText, originalText) {
+            const elements = Array.from(pNode.getElementsByTagName("*")).filter(el => el.localName === "t" || el.localName === "br");
+            if (elements.length === 0) return;
+
+            const diffs = dmp.diff_main(originalText, newText);
+            dmp.diff_cleanupSemantic(diffs);
+
+            let charToNodeMap = [];
+            elements.forEach(el => {
+                if (el.localName === "t") {
+                    const len = el.textContent.length;
+                    for (let i = 0; i < len; i++) charToNodeMap.push(el);
+                    el.textContent = ""; 
+                } else if (el.localName === "br") {
+                    charToNodeMap.push(el);
+                }
+            });
+
+            let origIdx = 0;
+            let currNode = elements[0];
+
+            diffs.forEach(([op, text]) => {
+                if (op === 0) {
+                    for (let i = 0; i < text.length; i++) {
+                        if (charToNodeMap[origIdx]) currNode = charToNodeMap[origIdx];
+                        if (currNode.localName === "t") currNode.textContent += text[i];
+                        origIdx++;
+                    }
+                } else if (op === 1) {
+                    const parts = text.split('\n');
+                    for (let i = 0; i < parts.length; i++) {
+                        if (i > 0) {
+                            const br = xmlDoc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:br");
+                            currNode.parentNode.insertBefore(br, currNode.nextSibling);
+                            const newT = xmlDoc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:t");
+                            newT.setAttribute("xml:space", "preserve");
+                            currNode.parentNode.insertBefore(newT, br.nextSibling);
+                            currNode = newT;
+                        }
+                        if (parts[i].length > 0) {
+                            if (currNode.localName === "br") {
+                                const newT = xmlDoc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:t");
+                                newT.setAttribute("xml:space", "preserve");
+                                currNode.parentNode.insertBefore(newT, currNode.nextSibling);
+                                currNode = newT;
+                            }
+                            currNode.textContent += parts[i];
+                        }
+                    }
+                } else if (op === -1) {
+                    for (let i = 0; i < text.length; i++) {
+                        if (charToNodeMap[origIdx] && charToNodeMap[origIdx].localName === "br") {
+                            const brNode = charToNodeMap[origIdx];
+                            if (brNode.parentNode) brNode.parentNode.removeChild(brNode);
+                        }
+                        origIdx++;
+                    }
+                    if (charToNodeMap[origIdx]) currNode = charToNodeMap[origIdx];
+                }
+            });
+        }
+
+        // --- Отрисовка UI ---
+        function renderPanels() {
+            els.leftPanel.innerHTML = '';
+            els.rightPanel.innerHTML = '';
+
+            pages.forEach((page, pageIndex) => {
+                const leftBlock = document.createElement('div');
+                leftBlock.className = `page-block ${pageIndex === currentPageIndex ? 'active' : ''}`;
+                leftBlock.id = `left-page-${pageIndex}`;
+                leftBlock.innerHTML = `<div class="page-title">Страница ${pageIndex + 1}</div>`;
+                
+                page.forEach(p => {
+                    const pEl = document.createElement('div');
+                    pEl.className = 'paragraph';
+                    pEl.textContent = p.originalText;
+                    leftBlock.appendChild(pEl);
+                });
+                els.leftPanel.appendChild(leftBlock);
+
+                const rightBlock = document.createElement('div');
+                rightBlock.className = `page-block ${pageIndex === currentPageIndex ? 'active' : ''}`;
+                rightBlock.id = `right-page-${pageIndex}`;
+                els.rightPanel.appendChild(rightBlock);
+                
+                updateRightPanelPage(pageIndex);
+            });
+
+            scrollToCurrentPage();
+            scheduleSyncHeights();
+        }
+
+        function updateRightPanelPage(pageIndex) {
+            const page = pages[pageIndex];
+            const rightBlock = document.getElementById(`right-page-${pageIndex}`);
+            if (!rightBlock) return;
+
+            const showDiff = els.showDiff.checked;
+            let html = `<div class="page-title">Страница ${pageIndex + 1}</div>`;
+
+            page.forEach(p => {
+                let content = p.modifiedText;
+                if (showDiff && p.originalText !== p.modifiedText) {
+                    content = generateDiffHTML(p.originalText, p.modifiedText);
+                }
+                html += `<div class="paragraph">${content}</div>`;
+            });
+
+            rightBlock.innerHTML = html;
+            scheduleSyncHeights();
+        }
+
+        els.showDiff.addEventListener('change', () => {
+            for (let i = 0; i < pages.length; i++) updateRightPanelPage(i);
+        });
+
+        function generateDiffHTML(original, modified) {
+            const diffs = dmp.diff_main(original, modified);
+            dmp.diff_cleanupSemantic(diffs);
+            let html = "";
+            for (let i = 0; i < diffs.length; i++) {
+                const op = diffs[i][0];
+                const data = diffs[i][1].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+                if (op === 1) html += `<ins>${data}</ins>`;
+                else if (op === -1) html += `<del>${data}</del>`;
+                else html += `<span>${data}</span>`;
+            }
+            return html;
+        }
+
+        function scrollToCurrentPage() {
+            const leftBlock = document.getElementById(`left-page-${currentPageIndex}`);
+            if (leftBlock) leftBlock.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function updateUIState() {
+            els.batchSize.disabled = isProcessing;
+            els.btnSaveBatch.disabled = isProcessing;
+            els.btnResetBatch.disabled = isProcessing;
+
+            if (pages.length === 0) {
+                els.btnStart.disabled = true;
+                els.btnReset.style.display = 'none';
+                return;
+            }
+
+            els.btnStart.disabled = false;
+            els.btnReset.style.display = 'block';
+
+            const progressPercent = (currentPageIndex / pages.length) * 100;
+            els.progressBar.style.width = `${progressPercent}%`;
+            els.progressText.textContent = `Обработано: ${currentPageIndex} из ${pages.length} страниц`;
+
+            if (currentPageIndex >= pages.length) {
+                els.btnStart.textContent = "Завершено";
+                els.btnStart.disabled = true;
+                els.btnDownload.style.display = 'block';
+            } else {
+                els.btnStart.textContent = isProcessing ? "Остановить" : (currentPageIndex > 0 ? "Продолжить" : "Начать работу");
+                els.btnDownload.style.display = 'none';
+            }
+        }
+
+        // --- Синхронизация высоты блоков (страниц) ---
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(scheduleSyncHeights, 100);
+        });
+
+        let syncHeightsRaf;
+        function scheduleSyncHeights() {
+            cancelAnimationFrame(syncHeightsRaf);
+            syncHeightsRaf = requestAnimationFrame(syncHeights);
+        }
+
+        function syncHeights() {
+            if (pages.length === 0) return;
+            
+            const leftNodes = els.leftPanel.querySelectorAll('.page-block');
+            const rightNodes = els.rightPanel.querySelectorAll('.page-block');
+            const maxLen = Math.max(leftNodes.length, rightNodes.length);
+            
+            // Используем типизированный массив для максимальной производительности
+            const heights = new Int32Array(maxLen);
+
+            // Этап 1: Массовый сброс (Batch Write)
+            for (let i = 0; i < maxLen; i++) {
+                if (leftNodes[i]) leftNodes[i].style.minHeight = '';
+                if (rightNodes[i]) rightNodes[i].style.minHeight = '';
+            }
+
+            // Этап 2: Массовое чтение (Batch Read - вызывает только один Reflow)
+            for (let i = 0; i < maxLen; i++) {
+                const hLeft = leftNodes[i] ? leftNodes[i].offsetHeight : 0;
+                const hRight = rightNodes[i] ? rightNodes[i].offsetHeight : 0;
+                heights[i] = Math.max(hLeft, hRight);
+            }
+
+            // Этап 3: Массовая запись (Batch Write)
+            for (let i = 0; i < maxLen; i++) {
+                if (leftNodes[i]) leftNodes[i].style.minHeight = heights[i] + 'px';
+                if (rightNodes[i]) rightNodes[i].style.minHeight = heights[i] + 'px';
+            }
+        }
+
+        // --- Логика ИИ ---
+        els.btnStart.addEventListener('click', () => {
+            if (isProcessing) {
+                isPaused = true;
+                isProcessing = false;
+                updateUIState();
+            } else {
+                if (!els.apiKey.value.trim()) return alert("Пожалуйста, введите OpenRouter API Key");
+                isPaused = false;
+                isProcessing = true;
+                startTime = Date.now();
+                processedCountThisSession = 0;
+                updateUIState();
+                processNextPage();
+            }
+        });
+
+        async function processNextPage(retryCount = 0) {
+            if (isPaused || currentPageIndex >= pages.length) {
+                isProcessing = false;
+                updateUIState();
+                return;
+            }
+
+            document.querySelectorAll('.page-block').forEach(el => el.classList.remove('active'));
+            document.getElementById(`left-page-${currentPageIndex}`)?.classList.add('active');
+            document.getElementById(`right-page-${currentPageIndex}`)?.classList.add('active');
+            scrollToCurrentPage();
+
+            const page = pages[currentPageIndex];
+            const apiKey = els.apiKey.value.trim();
+            const model = els.modelSelect.value;
+
+            batchStartTime = Date.now();
+
+            try {
+                const rightBlock = document.getElementById(`right-page-${currentPageIndex}`);
+                if (rightBlock) rightBlock.innerHTML = `<div class="page-title">Страница ${currentPageIndex + 1}</div><span style="color: var(--accent); animation: pulse 1.5s infinite;">Обработка нейросетью (Structured JSON)...</span>`;
+
+                const textsArray = page.map(p => p.originalText);
+                
+                const systemPrompt = "Ты — высококвалифицированный литературный редактор и корректор. Твоя цель — привести текст к идеальным нормам русского языка и типографики (ГОСТ для художественной литературы). Обязательно используй букву «ё» вместо «е» во всех нормативных случаях. Отвечай строго в формате JSON. В тексте могут встречаться незакрытые или разорванные XML/HTML теги (так как длинные абзацы бьются на части) — категорически запрещено их закрывать, удалять или исправлять, оставляй их как есть.";
+                const userPrompt = `Выполни глубокую редактуру текста, строго соблюдая следующие правила:
+1. Тире и дефисы (КРИТИЧЕСКИ ВАЖНО): Дефис (-) используй ТОЛЬКО как соединительный знак внутри слов (кто-то, из-за). Во всех остальных случаях используй длинное тире (—).
+- В НАЧАЛЕ АБЗАЦА (РЕПЛИКИ): Если строка является репликой диалога или начинается с любой черты, первым символом строки ОБЯЗАТЕЛЬНО должно стать длинное тире (—), за которым следует один пробел. Обязательно исправляй знак перед репликой на длинное тире, даже если в оригинальном тексте перед репликами стоят разные дефисы, минусы или их комбинации.
+- СЛОВА АВТОРА И ГОВОРЯЩИЙ: Если в исходном тексте слова автора отделены дефисом, обязательно замени этот дефис на длинное тире (—) с пробелами с обеих сторон. Если перед дефисом указан говорящий, профессионально сохраняй эту конструкцию, заменяя дефис на длинное тире (например: «Имя — реплика»).
+- ПЕРЕНОСЫ СЛОВ: Если слово разорвано знаком переноса (дефис или дефис с пробелом), обязательно удали этот знак и склей части слова воедино, так как при редактуре старые переносы становятся недействительными.
+2. Комплексная проверка: Устрани все орфографические, пунктуационные, грамматические, синтаксические и лексические ошибки. Учитывай согласование времен и падежей.
+3. Бережное отношение и форматирование: Категорически запрещено изменять правильные окончания слов, заменять корректные авторские слова синонимами или переписывать структуру предложений, если в них нет ошибок. Сохраняй оригинальный смысл, ритм и тон. ОБЯЗАТЕЛЬНО сохраняй оригинальное форматирование текста (ведущие и хвостовые пробелы, отступы, неразрывные пробелы, табуляции и спецсимволы). Если видишь куски XML-тегов, не трогай их и не пытайся валидировать.
+
+Текст предоставлен ниже в виде JSON массива строк.
+Верни строго JSON объект с единственным ключом "paragraphs", значением которого будет массив исправленных строк.
+КРИТИЧЕСКИ ВАЖНО: Количество элементов в массиве должно строго совпадать с оригиналом (${textsArray.length} шт). Не объединяй, не удаляй и не разбивай строки.
+
+Оригинал:
+${JSON.stringify(textsArray)}`;
+
+                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                    method: "POST",
+                    headers: { 
+                        "Authorization": `Bearer ${apiKey}`, 
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": window.location.href,
+                        "X-Title": "AI Docx Corrector"
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [
+                            { role: "system", content: systemPrompt },
+                            { role: "user", content: userPrompt }
+                        ],
+                        temperature: 0.0,
+                        top_p: 1.0,
+                        response_format: { type: "json_object" } // Включаем строгий JSON вывод
+                    })
+                });
+
+                if (!response.ok) throw new Error((await response.json()).error?.message || "API Error");
+
+                const data = await response.json();
+                const content = data.choices[0].message.content.trim();
+                
+                let parsedJson;
+                try {
+                    parsedJson = JSON.parse(content);
+                } catch (e) {
+                    throw new Error("Нейросеть вернула невалидный JSON.");
+                }
+
+                const correctedArray = parsedJson.paragraphs;
+
+                if (!Array.isArray(correctedArray) || correctedArray.length !== page.length) {
+                    console.warn("Несовпадение длины массива. Оригинал:", page.length, "Получено:", correctedArray ? correctedArray.length : 'undefined');
+                    throw new Error("Нейросеть нарушила структуру абзацев. Попробуйте еще раз.");
+                }
+
+                // Применяем изменения
+                for (let i = 0; i < page.length; i++) {
+                    const correctedText = correctedArray[i] || page[i].originalText;
+                    page[i].modifiedText = correctedText;
+                    setParagraphText(page[i].pNode, correctedText, page[i].originalText);
+                }
+                
+                updateRightPanelPage(currentPageIndex);
+                
+                currentPageIndex++;
+                processedCountThisSession++;
+                lastBatchTimeMs = Date.now() - batchStartTime;
+                totalProcessingTimeMs += lastBatchTimeMs;
+                saveProgressToSession();
+                updateTimeStats();
+                updateUIState();
+
+                setTimeout(processNextPage, 1000);
+
+            } catch (error) {
+                console.error(error);
+                if (retryCount < 10) {
+                    const delay = (retryCount + 1) * 1000;
+                    const rightBlock = document.getElementById(`right-page-${currentPageIndex}`);
+                    if (rightBlock) rightBlock.innerHTML = `<div class="page-title">Страница ${currentPageIndex + 1}</div><span style="color: var(--accent); animation: pulse 1.5s infinite;">Ошибка. Повторная попытка ${retryCount + 1}/10 через ${delay / 1000} сек...</span>`;
+                    setTimeout(() => processNextPage(retryCount + 1), delay);
+                } else {
+                    alert(`Ошибка на странице ${currentPageIndex + 1} после 10 попыток: ${error.message}`);
+                    isProcessing = false;
+                    isPaused = true;
+                    updateRightPanelPage(currentPageIndex); // Возврат UI
+                    updateUIState();
+                }
+            }
+        }
+
+        function updateTimeStats() {
+            if (processedCountThisSession === 0) return;
+            const elapsedMs = Date.now() - startTime;
+            const avgTime = elapsedMs / processedCountThisSession;
+            const remainingMs = avgTime * (pages.length - currentPageIndex);
+            const mins = Math.floor(remainingMs / 60000);
+            const secs = Math.floor((remainingMs % 60000) / 1000);
+            const batchSecs = (lastBatchTimeMs / 1000).toFixed(1);
+            
+            const totalMins = Math.floor(totalProcessingTimeMs / 60000);
+            const totalSecs = Math.floor((totalProcessingTimeMs % 60000) / 1000);
+            const totalTimeStr = totalMins > 0 ? `${totalMins}м ${totalSecs}с` : `${totalSecs}с`;
+
+            els.timeStats.textContent = `Последнее изменение: ${new Date().toLocaleTimeString()} | Время батча: ${batchSecs}с | Общее время: ${totalTimeStr} | Осталось: ~${mins}м ${secs}с`;
+        }
+
+        // --- Сессия ---
+        function saveProgressToSession() {
+            try {
+                sessionStorage.setItem('projectProgress', currentPageIndex.toString());
+                sessionStorage.setItem('projectModifiedXml', new XMLSerializer().serializeToString(xmlDoc));
+                sessionStorage.setItem('totalProcessingTimeMs', totalProcessingTimeMs.toString());
+            } catch (e) { console.warn("Лимит sessionStorage превышен."); }
+        }
+
+        async function restoreSession() {
+            loadSettings();
+            const base64Docx = sessionStorage.getItem('projectDocx');
+            const fileName = sessionStorage.getItem('projectName');
+            const savedProgress = sessionStorage.getItem('projectProgress');
+            const modifiedXml = sessionStorage.getItem('projectModifiedXml');
+            const savedTotalTime = sessionStorage.getItem('totalProcessingTimeMs');
+
+            if (base64Docx && fileName) {
+                els.fileNameDisplay.textContent = fileName + " (Восстановлено)";
+                if (savedProgress) currentPageIndex = parseInt(savedProgress, 10);
+                if (savedTotalTime) totalProcessingTimeMs = parseInt(savedTotalTime, 10);
+                await loadDocxFromArrayBuffer(base64ToArrayBuffer(base64Docx), modifiedXml);
+                
+                if (modifiedXml) {
+                    pages.forEach(page => page.forEach(p => p.modifiedText = getParagraphText(p.pNode)));
+                    renderPanels();
+                }
+                updateUIState();
+            }
+        }
+
+        els.btnReset.addEventListener('click', () => {
+            if(confirm("Сбросить текущий проект?")) {
+                ['projectDocx', 'projectName', 'projectProgress', 'projectModifiedXml', 'totalProcessingTimeMs'].forEach(k => sessionStorage.removeItem(k));
+                location.reload();
+            }
+        });
+
+        // --- Скачивание ---
+        els.btnDownload.addEventListener('click', async () => {
+            try {
+                docxZip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
+                const blob = await docxZip.generateAsync({ type: "blob" });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = (sessionStorage.getItem('projectName') || 'doc.docx').replace('.docx', '_corrected.docx');
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            } catch (error) { alert("Ошибка при создании файла."); }
+        });
+
+        function arrayBufferToBase64(buffer) {
+            let binary = ''; const bytes = new Uint8Array(buffer);
+            for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+            return window.btoa(binary);
+        }
+
+        function base64ToArrayBuffer(base64) {
+            const binary_string = window.atob(base64); const len = binary_string.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binary_string.charCodeAt(i);
+            return bytes.buffer;
+        }
+
+        const style = document.createElement('style');
+        style.innerHTML = `@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }`;
+        document.head.appendChild(style);
+
+        fetchModels();
+        restoreSession();
+    </script>
+</body>
+</html>
