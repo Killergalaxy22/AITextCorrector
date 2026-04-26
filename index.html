@@ -6,6 +6,7 @@
     <title>AI Docx Corrector (JSON Structured)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js"></script>
     
     <style>
         :root {
@@ -215,7 +216,8 @@
         let docxZip = null;
         let xmlDoc = null;
         
-        let CHARS_PER_BATCH = parseInt(sessionStorage.getItem('batchSize')) || 500; 
+        let CHARS_PER_BATCH = 500; 
+        let currentProjectName = 'doc.docx';
         let pages = []; 
         let currentPageIndex = 0;
         
@@ -260,11 +262,11 @@
                 els.modelLoading.style.display = 'none';
                 applyModelFilters();
                 
-                const savedModel = sessionStorage.getItem('selectedModel');
+                const savedModel = await idbKeyval.get('selectedModel');
                 if (savedModel && allModels.find(m => m.id === savedModel)) {
                     els.modelSelect.value = savedModel;
                 } else {
-                    const targetId = "google/gemini-2.5-flash:free";
+                    const targetId = "openai/gpt-oss-120b:free";
                     if (allModels.find(m => m.id === targetId)) els.modelSelect.value = targetId;
                 }
             } catch (error) {
@@ -297,20 +299,18 @@
 
         els.modelSearch.addEventListener('input', applyModelFilters);
         els.freeOnly.addEventListener('change', applyModelFilters);
-        els.modelSelect.addEventListener('change', () => sessionStorage.setItem('selectedModel', els.modelSelect.value));
+        els.modelSelect.addEventListener('change', () => idbKeyval.set('selectedModel', els.modelSelect.value));
 
         // --- Настройки ---
-        function saveSettings() { sessionStorage.setItem('openRouterApiKey', els.apiKey.value); }
-        function loadSettings() { const key = sessionStorage.getItem('openRouterApiKey'); if (key) els.apiKey.value = key; }
+        function saveSettings() { idbKeyval.set('openRouterApiKey', els.apiKey.value); }
+        async function loadSettings() { const key = await idbKeyval.get('openRouterApiKey'); if (key) els.apiKey.value = key; }
         els.apiKey.addEventListener('input', saveSettings);
-
-        els.batchSize.value = CHARS_PER_BATCH;
         
-        function updateBatchSettings() {
+        async function updateBatchSettings() {
             let newSize = parseInt(els.batchSize.value);
             if (isNaN(newSize) || newSize < 1) newSize = 500;
             CHARS_PER_BATCH = newSize;
-            sessionStorage.setItem('batchSize', CHARS_PER_BATCH);
+            await idbKeyval.set('batchSize', CHARS_PER_BATCH);
             
             if (xmlDoc) {
                 currentPageIndex = 0;
@@ -351,18 +351,18 @@
         async function handleFile(file) {
             if (!file.name.endsWith('.docx')) return alert('Пожалуйста, загрузите файл формата .docx');
             els.fileNameDisplay.textContent = file.name;
+            currentProjectName = file.name;
             
             try {
                 const arrayBuffer = await file.arrayBuffer();
-                const base64 = arrayBufferToBase64(arrayBuffer);
                 try {
-                    sessionStorage.setItem('projectDocx', base64);
-                    sessionStorage.setItem('projectName', file.name);
-                    sessionStorage.setItem('projectProgress', '0');
-                    sessionStorage.removeItem('projectModifiedXml');
-                    sessionStorage.setItem('totalProcessingTimeMs', '0');
+                    await idbKeyval.set('projectDocx', arrayBuffer);
+                    await idbKeyval.set('projectName', file.name);
+                    await idbKeyval.set('projectProgress', 0);
+                    await idbKeyval.del('projectModifiedXml');
+                    await idbKeyval.set('totalProcessingTimeMs', 0);
                     totalProcessingTimeMs = 0;
-                } catch (e) { console.warn("Файл слишком большой для sessionStorage."); }
+                } catch (e) { console.warn("Ошибка сохранения в IndexedDB", e); }
 
                 await loadDocxFromArrayBuffer(arrayBuffer);
             } catch (error) { alert('Ошибка при чтении файла.'); }
@@ -784,25 +784,31 @@ ${JSON.stringify(textsArray)}`;
         // --- Сессия ---
         function saveProgressToSession() {
             try {
-                sessionStorage.setItem('projectProgress', currentPageIndex.toString());
-                sessionStorage.setItem('projectModifiedXml', new XMLSerializer().serializeToString(xmlDoc));
-                sessionStorage.setItem('totalProcessingTimeMs', totalProcessingTimeMs.toString());
-            } catch (e) { console.warn("Лимит sessionStorage превышен."); }
+                idbKeyval.set('projectProgress', currentPageIndex);
+                idbKeyval.set('projectModifiedXml', new XMLSerializer().serializeToString(xmlDoc));
+                idbKeyval.set('totalProcessingTimeMs', totalProcessingTimeMs);
+            } catch (e) { console.warn("Ошибка сохранения прогресса.", e); }
         }
 
         async function restoreSession() {
-            loadSettings();
-            const base64Docx = sessionStorage.getItem('projectDocx');
-            const fileName = sessionStorage.getItem('projectName');
-            const savedProgress = sessionStorage.getItem('projectProgress');
-            const modifiedXml = sessionStorage.getItem('projectModifiedXml');
-            const savedTotalTime = sessionStorage.getItem('totalProcessingTimeMs');
+            await loadSettings();
+            
+            const savedBatch = await idbKeyval.get('batchSize');
+            if (savedBatch) CHARS_PER_BATCH = savedBatch;
+            els.batchSize.value = CHARS_PER_BATCH;
 
-            if (base64Docx && fileName) {
+            const arrayBuffer = await idbKeyval.get('projectDocx');
+            const fileName = await idbKeyval.get('projectName');
+            const savedProgress = await idbKeyval.get('projectProgress');
+            const modifiedXml = await idbKeyval.get('projectModifiedXml');
+            const savedTotalTime = await idbKeyval.get('totalProcessingTimeMs');
+
+            if (arrayBuffer && fileName) {
+                currentProjectName = fileName;
                 els.fileNameDisplay.textContent = fileName + " (Восстановлено)";
-                if (savedProgress) currentPageIndex = parseInt(savedProgress, 10);
-                if (savedTotalTime) totalProcessingTimeMs = parseInt(savedTotalTime, 10);
-                await loadDocxFromArrayBuffer(base64ToArrayBuffer(base64Docx), modifiedXml);
+                if (savedProgress !== undefined) currentPageIndex = parseInt(savedProgress, 10);
+                if (savedTotalTime !== undefined) totalProcessingTimeMs = parseInt(savedTotalTime, 10);
+                await loadDocxFromArrayBuffer(arrayBuffer, modifiedXml);
                 
                 if (modifiedXml) {
                     pages.forEach(page => page.forEach(p => p.modifiedText = getParagraphText(p.pNode)));
@@ -812,9 +818,9 @@ ${JSON.stringify(textsArray)}`;
             }
         }
 
-        els.btnReset.addEventListener('click', () => {
+        els.btnReset.addEventListener('click', async () => {
             if(confirm("Сбросить текущий проект?")) {
-                ['projectDocx', 'projectName', 'projectProgress', 'projectModifiedXml', 'totalProcessingTimeMs'].forEach(k => sessionStorage.removeItem(k));
+                await idbKeyval.delMany(['projectDocx', 'projectName', 'projectProgress', 'projectModifiedXml', 'totalProcessingTimeMs']);
                 location.reload();
             }
         });
@@ -826,23 +832,10 @@ ${JSON.stringify(textsArray)}`;
                 const blob = await docxZip.generateAsync({ type: "blob" });
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(blob);
-                link.download = (sessionStorage.getItem('projectName') || 'doc.docx').replace('.docx', '_corrected.docx');
+                link.download = currentProjectName.replace('.docx', '_corrected.docx');
                 document.body.appendChild(link); link.click(); document.body.removeChild(link);
             } catch (error) { alert("Ошибка при создании файла."); }
         });
-
-        function arrayBufferToBase64(buffer) {
-            let binary = ''; const bytes = new Uint8Array(buffer);
-            for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-            return window.btoa(binary);
-        }
-
-        function base64ToArrayBuffer(base64) {
-            const binary_string = window.atob(base64); const len = binary_string.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) bytes[i] = binary_string.charCodeAt(i);
-            return bytes.buffer;
-        }
 
         const style = document.createElement('style');
         style.innerHTML = `@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }`;
