@@ -841,8 +841,41 @@ ${JSON.stringify(textsArray)}`;
         style.innerHTML = `@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }`;
         document.head.appendChild(style);
 
-        fetchModels();
-        restoreSession();
+        // === НАЧАЛО МИГРАЦИИ ИЗ SESSIONSTORAGE ===
+        async function migrateFromSessionStorage() {
+            if (sessionStorage.length === 0) return;
+
+            const keys = ['openRouterApiKey', 'selectedModel', 'batchSize', 'projectName', 'projectProgress', 'projectModifiedXml', 'totalProcessingTimeMs'];
+            for (const key of keys) {
+                const val = sessionStorage.getItem(key);
+                if (val !== null) {
+                    if (['batchSize', 'projectProgress', 'totalProcessingTimeMs'].includes(key)) {
+                        await idbKeyval.set(key, parseInt(val, 10));
+                    } else {
+                        await idbKeyval.set(key, val);
+                    }
+                }
+            }
+
+            const base64Docx = sessionStorage.getItem('projectDocx');
+            if (base64Docx) {
+                try {
+                    const binary_string = window.atob(base64Docx);
+                    const len = binary_string.length;
+                    const bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) bytes[i] = binary_string.charCodeAt(i);
+                    await idbKeyval.set('projectDocx', bytes.buffer);
+                } catch (e) { console.warn("Ошибка миграции файла", e); }
+            }
+            
+            sessionStorage.clear();
+        }
+        // === КОНЕЦ МИГРАЦИИ ИЗ SESSIONSTORAGE ===
+
+        migrateFromSessionStorage().then(() => {
+            fetchModels();
+            restoreSession();
+        });
     </script>
 </body>
 </html>
